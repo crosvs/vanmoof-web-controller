@@ -107,12 +107,12 @@ function UnlockBike({ bike }: { bike: Bike }) {
         lockState === LockStateEnum.Locked   ? 'Locked'   :
         lockState === LockStateEnum.Standby  ? 'Standby'  :
         lockState === LockStateEnum.Alarm    ? 'Alarm'    :
-        lockState !== undefined              ? `State: ${lockState}` : undefined
+        lockState !== undefined              ? `Unknown`  : undefined
 
     return (
         <>
             <h3>Lock</h3>
-            {stateLabel && <p>Status: <b>{stateLabel}</b></p>}
+            {lockState !== undefined && <p>Status: <b>{stateLabel} ({lockState})</b></p>}
             <Button onClick={unlock} disabled={loading}>
                 {loading ? 'Unlocking...' : 'Unlock bike'}
             </Button>

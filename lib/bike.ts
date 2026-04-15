@@ -30,8 +30,8 @@ export enum SpeedLimit {
 
 export enum LockState {
     Standby = 0,
-    Unlocked = 1,
-    Locked = 2,
+    Locked = 1,
+    Unlocked = 2,
     Alarm = 3,
 }
 
@@ -174,7 +174,7 @@ export class Bike {
     }
 
     async unlockBike(): Promise<void> {
-        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]))
+        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]), false)
     }
 
     async playSound(id: number) {
