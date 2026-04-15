@@ -29,11 +29,10 @@ export enum SpeedLimit {
 }
 
 export enum LockState {
-    Locked = 0,
-    UnlockRequest = 1,
-    Unlocking = 2,
-    Unlocked = 3,
-    Standby = 4,
+    Standby = 0,
+    Unlocked = 1,
+    Locked = 2,
+    Alarm = 3,
 }
 
 const wait = (timeout: number): Promise<never> =>
@@ -175,7 +174,7 @@ export class Bike {
     }
 
     async unlockBike(): Promise<void> {
-        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x01, 0x01]))
+        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]))
     }
 
     async playSound(id: number) {

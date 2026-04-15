@@ -96,7 +96,7 @@ function UnlockBike({ bike }: { bike: Bike }) {
             const newState = await bike.getLockState()
             setLockState(newState)
         } catch (e) {
-            setError('Failed to unlock bike')
+            setError(`Failed to unlock bike: ${e instanceof Error ? e.message : String(e)}`)
         } finally {
             setLoading(false)
         }
@@ -105,6 +105,8 @@ function UnlockBike({ bike }: { bike: Bike }) {
     const stateLabel =
         lockState === LockStateEnum.Unlocked ? 'Unlocked' :
         lockState === LockStateEnum.Locked   ? 'Locked'   :
+        lockState === LockStateEnum.Standby  ? 'Standby'  :
+        lockState === LockStateEnum.Alarm    ? 'Alarm'    :
         lockState !== undefined              ? `State: ${lockState}` : undefined
 
     return (
