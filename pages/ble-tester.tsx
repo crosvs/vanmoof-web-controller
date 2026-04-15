@@ -33,6 +33,7 @@ interface LogEntry {
     op: Op
     payload?: string
     encrypt: boolean
+    withoutResponse: boolean
     result: string
 }
 
@@ -40,7 +41,7 @@ interface RawBikeInterface {
     mac: string
     disconnect?(): void
     rawRead(characteristic: Characteristic, decrypt?: boolean): Promise<Uint8Array>
-    rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean): Promise<void>
+    rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, withoutResponse?: boolean): Promise<void>
     rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, timeout?: number): Promise<Uint8Array>
 }
 
@@ -54,7 +55,7 @@ class FakeRawBike implements RawBikeInterface {
         return new Uint8Array([0x01, 0x00])
     }
 
-    async rawWrite(_char: Characteristic, _data: Uint8Array, _encrypt = false): Promise<void> {
+    async rawWrite(_char: Characteristic, _data: Uint8Array, _encrypt = false, _withoutResponse = false): Promise<void> {
         await delay(150)
     }
 
@@ -208,6 +209,7 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
     const [op, setOp] = useState<Op>('write')
     const [hexInput, setHexInput] = useState('02 01')
     const [encrypt, setEncrypt] = useState(false)
+    const [withoutResponse, setWithoutResponse] = useState(false)
     const [readDelay, setReadDelay] = useState(0)
     const [running, setRunning] = useState(false)
     const [log, setLog] = useState<LogEntry[]>([])
@@ -226,7 +228,7 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
             } else {
                 const payload = parseHex(hexInput)
                 if (op === 'write') {
-                    await bike.rawWrite(char, payload, encrypt)
+                    await bike.rawWrite(char, payload, encrypt, withoutResponse)
                     result = '✓ write ok'
                 } else {
                     const data = await bike.rawReadWrite(char, payload, encrypt, readDelay)
@@ -236,7 +238,7 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
         } catch (e) {
             result = '✗ ' + (e instanceof Error ? e.message : String(e))
         }
-        pushLog({ ts, charKey, op, payload: op !== 'read' ? hexInput : undefined, encrypt, result })
+        pushLog({ ts, charKey, op, payload: op !== 'read' ? hexInput : undefined, encrypt, withoutResponse, result })
         setRunning(false)
     }
 
@@ -282,6 +284,13 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
                 <input type='checkbox' checked={encrypt} onChange={e => setEncrypt(e.target.checked)} />
             </div>
 
+            {op === 'write' && (
+                <div className='row'>
+                    <label>Without response</label>
+                    <input type='checkbox' checked={withoutResponse} onChange={e => setWithoutResponse(e.target.checked)} />
+                </div>
+            )}
+
             {isReadWrite && (
                 <div className='row'>
                     <label>Read delay (ms)</label>
@@ -309,7 +318,7 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
                         <div key={i} className='entry'>
                             <span className='ets'>{entry.ts}</span>
                             <span className='echar'>{entry.charKey}</span>
-                            <span className='eop'>{entry.op}{entry.encrypt ? ' enc' : ''}</span>
+                            <span className='eop'>{entry.op}{entry.encrypt ? ' enc' : ''}{entry.withoutResponse ? ' wor' : ''}</span>
                             {entry.payload && <span className='epay'>→ {entry.payload}</span>}
                             <span className={`eres ${entry.result.startsWith('✗') ? 'err' : ''}`}>
                                 {entry.result}

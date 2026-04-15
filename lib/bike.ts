@@ -104,15 +104,19 @@ export class Bike {
         return await this.queue.push(() => this.bluetoothReadWithoutQueue(characteristic, decrypt))
     }
 
-    private async bluetoothWriteWithoutQueue(characteristic: Characteristic, data: Uint8Array, encrypted = true) {
+    private async bluetoothWriteWithoutQueue(characteristic: Characteristic, data: Uint8Array, encrypted = true, withoutResponse = false) {
         const payload = encrypted ? await this.makeEncryptedPayloadWithoutQueue(data) : data
         const bluetoothService = await this.server.getPrimaryService(characteristic.service)
         const bluetoothCharacteristic = await bluetoothService.getCharacteristic(characteristic.id)
-        await bluetoothCharacteristic.writeValue(payload)
+        if (withoutResponse) {
+            await (bluetoothCharacteristic as any).writeValueWithoutResponse(payload)
+        } else {
+            await bluetoothCharacteristic.writeValue(payload)
+        }
     }
 
-    private async bluetoothWrite(characteristic: Characteristic, data: Uint8Array, encrypted = true) {
-        await this.queue.push(() => this.bluetoothWriteWithoutQueue(characteristic, data, encrypted))
+    private async bluetoothWrite(characteristic: Characteristic, data: Uint8Array, encrypted = true, withoutResponse = false) {
+        await this.queue.push(() => this.bluetoothWriteWithoutQueue(characteristic, data, encrypted, withoutResponse))
     }
 
     private async bluetoothReadWrite(characteristic: Characteristic, data: Uint8Array, { encryptedAndDecrypt = true, timeout = 0 }): Promise<Uint8Array> {
@@ -181,8 +185,8 @@ export class Bike {
         return await this.bluetoothRead(characteristic, decrypt)
     }
 
-    async rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true): Promise<void> {
-        await this.bluetoothWrite(characteristic, data, encrypt)
+    async rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true, withoutResponse = false): Promise<void> {
+        await this.bluetoothWrite(characteristic, data, encrypt, withoutResponse)
     }
 
     async rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true, timeout = 0): Promise<Uint8Array> {
