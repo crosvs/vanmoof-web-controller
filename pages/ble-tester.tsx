@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { BikeCredentials, Characteristic, CHARACTERISTICS, connectToBike } from '../lib/bike'
 import { Button } from '../components/Button'
 
@@ -166,7 +167,7 @@ function BikeConnector({ credentials, connecting, error, onConnect, onFakeBike }
 
             {credentials.length === 0 && (
                 <p style={{ color: 'var(--label-color)', textAlign: 'center' }}>
-                    No saved credentials — <a href='/'>log in</a> to see real bikes, or use the fake bike below.
+                    No saved credentials — <Link href='/'>log in</Link> to see real bikes, or use the fake bike below.
                 </p>
             )}
 
