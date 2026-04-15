@@ -28,6 +28,14 @@ export enum SpeedLimit {
     NO_LIMIT = 3,
 }
 
+export enum LockState {
+    Locked = 0,
+    UnlockRequest = 1,
+    Unlocking = 2,
+    Unlocked = 3,
+    Standby = 4,
+}
+
 const wait = (timeout: number): Promise<never> =>
     new Promise(res => setTimeout(res, timeout))
 
@@ -159,6 +167,15 @@ export class Bike {
         // Re-authenticate
         await this.authenticate(false)
         console.log('success reconnecting..')
+    }
+
+    async getLockState(): Promise<LockState> {
+        const result = await this.bluetoothRead(LOCK_STATE)
+        return result[0] as LockState
+    }
+
+    async unlockBike(): Promise<void> {
+        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x01, 0x01]))
     }
 
     async playSound(id: number) {
