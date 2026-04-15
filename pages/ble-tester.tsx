@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Bike, BikeCredentials, Characteristic, CHARACTERISTICS, connectToBike } from '../lib/bike'
+import { BikeCredentials, Characteristic, CHARACTERISTICS, connectToBike } from '../lib/bike'
 import { Button } from '../components/Button'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -20,6 +20,8 @@ function fmtBytes(bytes: Uint8Array): string {
     return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ')
 }
 
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+
 // ─── types ───────────────────────────────────────────────────────────────────
 
 type Op = 'read' | 'write' | 'readwrite'
@@ -33,11 +35,39 @@ interface LogEntry {
     result: string
 }
 
+interface RawBikeInterface {
+    mac: string
+    disconnect?(): void
+    rawRead(characteristic: Characteristic, decrypt?: boolean): Promise<Uint8Array>
+    rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean): Promise<void>
+    rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, timeout?: number): Promise<Uint8Array>
+}
+
+// ─── fake bike ───────────────────────────────────────────────────────────────
+
+class FakeRawBike implements RawBikeInterface {
+    mac = 'FA:KE:BI:KE:00:00'
+
+    async rawRead(_char: Characteristic, _decrypt = true): Promise<Uint8Array> {
+        await delay(150)
+        return new Uint8Array([0x01, 0x00])
+    }
+
+    async rawWrite(_char: Characteristic, _data: Uint8Array, _encrypt = false): Promise<void> {
+        await delay(150)
+    }
+
+    async rawReadWrite(_char: Characteristic, _data: Uint8Array, _encrypt = false, timeout = 0): Promise<Uint8Array> {
+        await delay(Math.max(150, timeout))
+        return new Uint8Array([0x01, 0x00])
+    }
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default function BleTester() {
     const [credentials, setCredentials] = useState<BikeCredentials[]>([])
-    const [bike, setBike] = useState<Bike | undefined>()
+    const [bike, setBike] = useState<RawBikeInterface | undefined>()
     const [connecting, setConnecting] = useState(false)
     const [connectError, setConnectError] = useState<string | undefined>()
 
@@ -63,7 +93,7 @@ export default function BleTester() {
     }
 
     const disconnect = () => {
-        bike?.disconnect()
+        bike?.disconnect?.()
         setBike(undefined)
     }
 
@@ -85,6 +115,7 @@ export default function BleTester() {
                     connecting={connecting}
                     error={connectError}
                     onConnect={connect}
+                    onFakeBike={() => setBike(new FakeRawBike())}
                 />
             )}
 
@@ -108,37 +139,61 @@ export default function BleTester() {
 
 // ─── bike connector ───────────────────────────────────────────────────────────
 
-function BikeConnector({ credentials, connecting, error, onConnect }: {
+function BikeConnector({ credentials, connecting, error, onConnect, onFakeBike }: {
     credentials: BikeCredentials[]
     connecting: boolean
     error: string | undefined
     onConnect: (creds: BikeCredentials) => void
+    onFakeBike: () => void
 }) {
-    if (credentials.length === 0) {
-        return (
-            <p style={{ color: 'var(--label-color)', textAlign: 'center' }}>
-                No bike credentials found. Log in on the{' '}
-                <a href='/'>home page</a> first.
-            </p>
-        )
-    }
-
     return (
         <>
-            <p style={{ color: 'var(--label-color)' }}>Select a bike to connect:</p>
-            <div className='bikes'>
-                {credentials.map((creds, i) => (
-                    <Button key={i} onClick={() => onConnect(creds)} disabled={connecting}>
-                        {creds.name}
-                        <span className='mac'>{creds.mac}</span>
-                    </Button>
-                ))}
-            </div>
-            {error && <p className='err'>{error}</p>}
+            {credentials.length > 0 && (
+                <>
+                    <p style={{ color: 'var(--label-color)' }}>Select a bike to connect:</p>
+                    <div className='bikes'>
+                        {credentials.map((creds, i) => (
+                            <Button key={i} onClick={() => onConnect(creds)} disabled={connecting}>
+                                {creds.name}
+                                <span className='mac'>{creds.mac}</span>
+                            </Button>
+                        ))}
+                    </div>
+                    {error && <p className='err'>{error}</p>}
+                    <div className='divider'><span>or</span></div>
+                </>
+            )}
+
+            {credentials.length === 0 && (
+                <p style={{ color: 'var(--label-color)', textAlign: 'center' }}>
+                    No saved credentials — <a href='/'>log in</a> to see real bikes, or use the fake bike below.
+                </p>
+            )}
+
+            <Button onClick={onFakeBike} secondary>
+                Use fake bike
+                <span className='mac'>FA:KE:BI:KE:00:00</span>
+            </Button>
+
             <style jsx>{`
                 .bikes { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 320px; }
                 .mac { display: block; font-size: 0.75rem; color: var(--label-color); }
                 .err { color: red; margin-top: 8px; }
+                .divider {
+                    display: flex;
+                    align-items: center;
+                    width: 100%;
+                    max-width: 320px;
+                    margin: 12px 0;
+                    gap: 8px;
+                    color: var(--label-color);
+                    font-size: 0.85rem;
+                }
+                .divider::before, .divider::after {
+                    content: '';
+                    flex: 1;
+                    border-top: 1px solid var(--secondary-border-color);
+                }
             `}</style>
         </>
     )
@@ -146,7 +201,7 @@ function BikeConnector({ credentials, connecting, error, onConnect }: {
 
 // ─── raw writer ───────────────────────────────────────────────────────────────
 
-function RawBleWriter({ bike }: { bike: Bike }) {
+function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
     const charKeys = Object.keys(CHARACTERISTICS)
     const [charKey, setCharKey] = useState('UNLOCK_REQUEST')
     const [op, setOp] = useState<Op>('write')
@@ -285,10 +340,14 @@ function RawBleWriter({ bike }: { bike: Bike }) {
                 select, input[type='text'], input.mono {
                     flex: 1;
                     padding: 6px 8px;
-                    background: transparent;
+                    background-color: var(--main-bg-color);
                     border: 1px solid var(--border-color);
                     color: var(--text-color);
                     font-size: 0.9rem;
+                }
+                select option {
+                    background-color: var(--main-bg-color);
+                    color: var(--text-color);
                 }
                 input.mono { font-family: monospace; }
                 input.short { flex: none; width: 80px; }
