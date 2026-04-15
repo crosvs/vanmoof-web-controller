@@ -25,7 +25,7 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
-type Op = 'read' | 'write' | 'readwrite'
+type Op = 'read' | 'write' | 'readwrite' | 'props'
 
 interface LogEntry {
     ts: string
@@ -43,6 +43,7 @@ interface RawBikeInterface {
     rawRead(characteristic: Characteristic, decrypt?: boolean): Promise<Uint8Array>
     rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, withoutResponse?: boolean): Promise<void>
     rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, timeout?: number): Promise<Uint8Array>
+    rawCharacteristicProperties(characteristic: Characteristic): Promise<Record<string, boolean>>
 }
 
 // ─── fake bike ───────────────────────────────────────────────────────────────
@@ -62,6 +63,11 @@ class FakeRawBike implements RawBikeInterface {
     async rawReadWrite(_char: Characteristic, _data: Uint8Array, _encrypt = false, timeout = 0): Promise<Uint8Array> {
         await delay(Math.max(150, timeout))
         return new Uint8Array([0x01, 0x00])
+    }
+
+    async rawCharacteristicProperties(_char: Characteristic): Promise<Record<string, boolean>> {
+        await delay(50)
+        return { broadcast: false, read: true, writeWithoutResponse: true, write: false, notify: true, indicate: false }
     }
 }
 
@@ -225,6 +231,10 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
             if (op === 'read') {
                 const data = await bike.rawRead(char, encrypt)
                 result = '← ' + fmtBytes(data)
+            } else if (op === 'props') {
+                const props = await bike.rawCharacteristicProperties(char)
+                const active = Object.entries(props).filter(([, v]) => v).map(([k]) => k)
+                result = active.length > 0 ? active.join(', ') : 'none'
             } else {
                 const payload = parseHex(hexInput)
                 if (op === 'write') {
@@ -238,11 +248,12 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
         } catch (e) {
             result = '✗ ' + (e instanceof Error ? e.message : String(e))
         }
-        pushLog({ ts, charKey, op, payload: op !== 'read' ? hexInput : undefined, encrypt, withoutResponse, result })
+        const hasPayload = op === 'write' || op === 'readwrite'
+        pushLog({ ts, charKey, op, payload: hasPayload ? hexInput : undefined, encrypt, withoutResponse, result })
         setRunning(false)
     }
 
-    const isWrite = op !== 'read'
+    const isWrite = op === 'write' || op === 'readwrite'
     const isReadWrite = op === 'readwrite'
 
     return (
@@ -257,7 +268,7 @@ function RawBleWriter({ bike }: { bike: RawBikeInterface }) {
             <div className='row'>
                 <label>Operation</label>
                 <div className='ops'>
-                    {(['read', 'write', 'readwrite'] as Op[]).map(o => (
+                    {(['read', 'write', 'readwrite', 'props'] as Op[]).map(o => (
                         <label key={o} className='radio'>
                             <input type='radio' checked={op === o} onChange={() => setOp(o)} />
                             {o}

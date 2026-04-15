@@ -29,9 +29,9 @@ export enum SpeedLimit {
 }
 
 export enum LockState {
-    Standby = 0,
+    Unlocked = 0,
     Locked = 1,
-    Unlocked = 2,
+    Standby = 2,
     Alarm = 3,
 }
 
@@ -191,6 +191,20 @@ export class Bike {
 
     async rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true, timeout = 0): Promise<Uint8Array> {
         return await this.bluetoothReadWrite(characteristic, data, { encryptedAndDecrypt: encrypt, timeout })
+    }
+
+    async rawCharacteristicProperties(characteristic: Characteristic): Promise<Record<string, boolean>> {
+        const bluetoothService = await this.server.getPrimaryService(characteristic.service)
+        const char = await bluetoothService.getCharacteristic(characteristic.id)
+        const p = char.properties
+        return {
+            broadcast: p.broadcast,
+            read: p.read,
+            writeWithoutResponse: p.writeWithoutResponse,
+            write: p.write,
+            notify: p.notify,
+            indicate: p.indicate,
+        }
     }
 
     async playSound(id: number) {

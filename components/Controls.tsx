@@ -107,7 +107,7 @@ function UnlockBike({ bike }: { bike: Bike }) {
         lockState === LockStateEnum.Locked   ? 'Locked'   :
         lockState === LockStateEnum.Standby  ? 'Standby'  :
         lockState === LockStateEnum.Alarm    ? 'Alarm'    :
-        lockState !== undefined              ? `Unknown`  : undefined
+        lockState !== undefined              ? 'Unknown'  : undefined
 
     return (
         <>
