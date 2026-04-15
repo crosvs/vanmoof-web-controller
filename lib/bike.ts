@@ -177,6 +177,18 @@ export class Bike {
         await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]), false)
     }
 
+    async rawRead(characteristic: Characteristic, decrypt = true): Promise<Uint8Array> {
+        return await this.bluetoothRead(characteristic, decrypt)
+    }
+
+    async rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true): Promise<void> {
+        await this.bluetoothWrite(characteristic, data, encrypt)
+    }
+
+    async rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true, timeout = 0): Promise<Uint8Array> {
+        return await this.bluetoothReadWrite(characteristic, data, { encryptedAndDecrypt: encrypt, timeout })
+    }
+
     async playSound(id: number) {
         await this.bluetoothWrite(PLAY_SOUND, new Uint8Array([id, 0x1]))
     }
@@ -350,3 +362,45 @@ export const SENSOR = c(LIGHT_SERVICE, "6acc5584-e631-4069-944d-b8ca7598ad50")
 const FIRMWARE_SERVICE = "6acc5510-e631-4069-944d-b8ca7598ad50"
 export const FIRMWARE_METADATA = c(FIRMWARE_SERVICE, "6acc5511-e631-4069-944d-b8ca7598ad50")
 export const FIRMWARE_BLOCK = c(FIRMWARE_SERVICE, "6acc5512-e631-4069-944d-b8ca7598ad50")
+
+export const CHARACTERISTICS: Record<string, Characteristic> = {
+    // Security
+    'CHALLENGE':                   CHALLENGE,
+    'KEY_INDEX':                   KEY_INDEX,
+    'BACKUP_CODE':                 BACKUP_CODE,
+    'BIKE_MESSAGE':                BIKE_MESSAGE,
+    // Defense
+    'LOCK_STATE':                  LOCK_STATE,
+    'UNLOCK_REQUEST':              UNLOCK_REQUEST,
+    'ALARM_STATE':                 ALARM_STATE,
+    'ALARM_MODE':                  ALARM_MODE,
+    // Movement
+    'DISTANCE':                    DISTANCE,
+    'SPEED':                       SPEED,
+    'UNIT_SYSTEM':                 UNIT_SYSTEM,
+    'POWER_LEVEL':                 POWER_LEVEL,
+    'SPEED_LIMIT':                 SPEED_LIMIT,
+    // Bike info
+    'MOTOR_BATTERY_LEVEL':         MOTOR_BATTERY_LEVEL,
+    'MOTOR_BATTERY_STATE':         MOTOR_BATTERY_STATE,
+    'MODULE_BATTERY_LEVEL':        MODULE_BATTERY_LEVEL,
+    'MODULE_BATTERY_STATE':        MODULE_BATTERY_STATE,
+    'BIKE_FIRMWARE_VERSION':       BIKE_FIRMWARE_VERSION,
+    'BLE_CHIP_FIRMWARE_VERSION':   BLE_CHIP_FIRMWARE_VERSION,
+    'CONTROLLER_FIRMWARE_VERSION': CONTROLLER_FIRMWARE_VERSION,
+    'PCBA_HARDWARE_VERSION':       PCBA_HARDWARE_VERSION,
+    'FRAME_NUMBER':                FRAME_NUMBER,
+    // Bike state
+    'MODULE_MODE':                 MODULE_MODE,
+    'MODULE_STATE':                MODULE_STATE,
+    'ERRORS':                      ERRORS,
+    'WHEEL_SIZE':                  WHEEL_SIZE,
+    'CLOCK':                       CLOCK,
+    // Sound
+    'PLAY_SOUND':                  PLAY_SOUND,
+    'SOUND_VOLUME':                SOUND_VOLUME,
+    'BELL_SOUND':                  BELL_SOUND,
+    // Light
+    'LIGHT_MODE':                  LIGHT_MODE,
+    'SENSOR':                      SENSOR,
+}
