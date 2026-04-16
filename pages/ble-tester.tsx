@@ -44,6 +44,8 @@ interface RawBikeInterface {
     rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, withoutResponse?: boolean): Promise<void>
     rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt?: boolean, timeout?: number): Promise<Uint8Array>
     rawCharacteristicProperties(characteristic: Characteristic): Promise<Record<string, boolean>>
+    rawSubscribe(characteristic: Characteristic, callback: (data: Uint8Array) => void, decrypt?: boolean): Promise<void>
+    rawUnsubscribe(characteristic: Characteristic): Promise<void>
 }
 
 // ─── fake bike ───────────────────────────────────────────────────────────────
@@ -67,7 +69,17 @@ class FakeRawBike implements RawBikeInterface {
 
     async rawCharacteristicProperties(_char: Characteristic): Promise<Record<string, boolean>> {
         await delay(50)
-        return { broadcast: false, read: true, writeWithoutResponse: true, write: false, notify: true, indicate: false }
+        return { broadcast: false, read: true, writeWithoutResponse: true, write: false, notify: true, indicate: false, authenticatedSignedWrites: true }
+    }
+
+    async rawSubscribe(_char: Characteristic, callback: (data: Uint8Array) => void, _decrypt = true): Promise<void> {
+        await delay(50)
+        // Simulate a notification after 1s so the UI can be tested
+        setTimeout(() => callback(new Uint8Array([0x01])), 1000)
+    }
+
+    async rawUnsubscribe(_char: Characteristic): Promise<void> {
+        await delay(50)
     }
 }
 
@@ -113,7 +125,10 @@ export default function BleTester() {
                 <>
                     <p className='connected'>Connected to <b>{bike.mac}</b></p>
                     <RawBleWriter bike={bike} />
-                    <Button onClick={disconnect} secondary style={{ marginTop: 24 }}>
+                    <div style={{ marginTop: 24, width: '100%', maxWidth: 520 }}>
+                        <NotificationWatcher bike={bike} />
+                    </div>
+                    <Button onClick={disconnect} secondary style={{ marginTop: 16 }}>
                         Disconnect
                     </Button>
                 </>
@@ -140,6 +155,164 @@ export default function BleTester() {
                     color: var(--label-color);
                     margin: 0 0 1.5rem;
                 }
+            `}</style>
+        </div>
+    )
+}
+
+// ─── notification watcher ────────────────────────────────────────────────────
+
+interface NotifEntry {
+    ts: string
+    charKey: string
+    raw: string
+    dec: string
+}
+
+function NotificationWatcher({ bike }: { bike: RawBikeInterface }) {
+    const charKeys = Object.keys(CHARACTERISTICS)
+    const [charKey, setCharKey] = useState('LOCK_STATE')
+    const [decrypt, setDecrypt] = useState(true)
+    const [subscribed, setSubscribed] = useState<Set<string>>(new Set())
+    const [notifs, setNotifs] = useState<NotifEntry[]>([])
+
+    const subscribe = async () => {
+        const char: Characteristic = CHARACTERISTICS[charKey]
+        const ts = () => new Date().toLocaleTimeString()
+        try {
+            await bike.rawSubscribe(char, (data) => {
+                const raw = fmtBytes(data)
+                // data is already decrypted if decrypt=true, raw otherwise
+                setNotifs(prev => [{ ts: ts(), charKey, raw, dec: raw }, ...prev])
+            }, decrypt)
+            setSubscribed(prev => new Set(prev).add(charKey))
+        } catch (e) {
+            setNotifs(prev => [{ ts: ts(), charKey, raw: '', dec: '✗ ' + (e instanceof Error ? e.message : String(e)) }, ...prev])
+        }
+    }
+
+    const unsubscribe = async () => {
+        const char: Characteristic = CHARACTERISTICS[charKey]
+        try {
+            await bike.rawUnsubscribe(char)
+        } catch { /* ignore */ }
+        setSubscribed(prev => { const s = new Set(prev); s.delete(charKey); return s })
+    }
+
+    const isSubscribed = subscribed.has(charKey)
+
+    return (
+        <div className='watcher'>
+            <div className='watcherHeader'>Notifications</div>
+            <div className='row'>
+                <label>Characteristic</label>
+                <select value={charKey} onChange={e => setCharKey(e.target.value)}>
+                    {charKeys.map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+            </div>
+            <div className='row'>
+                <label>Decrypt</label>
+                <input type='checkbox' checked={decrypt} onChange={e => setDecrypt(e.target.checked)} />
+            </div>
+            <div className='row'>
+                <Button onClick={isSubscribed ? unsubscribe : subscribe} secondary style={{ fontSize: '0.85rem', padding: '6px 14px' }}>
+                    {isSubscribed ? `Unsubscribe ${charKey}` : `Subscribe ${charKey}`}
+                </Button>
+                {subscribed.size > 0 && (
+                    <span className='activeSubs'>
+                        Watching: {Array.from(subscribed).join(', ')}
+                    </span>
+                )}
+            </div>
+            {notifs.length > 0 && (
+                <div className='log'>
+                    <div className='logHeader'>
+                        <span>Notifications</span>
+                        <button className='clear' onClick={() => setNotifs([])}>clear</button>
+                    </div>
+                    {notifs.map((n, i) => (
+                        <div key={i} className='entry'>
+                            <span className='ets'>{n.ts}</span>
+                            <span className='echar'>{n.charKey}</span>
+                            <span className='eres'>{n.dec}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+            <style jsx>{`
+                .watcher {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    border: 1px solid var(--border-color);
+                    padding: 12px;
+                }
+                .watcherHeader {
+                    font-size: 0.8rem;
+                    color: var(--label-color);
+                    font-weight: bold;
+                    margin-bottom: 2px;
+                }
+                .row {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                }
+                .row label {
+                    width: 130px;
+                    flex-shrink: 0;
+                    font-size: 0.85rem;
+                    color: var(--label-color);
+                }
+                select {
+                    flex: 1;
+                    padding: 6px 8px;
+                    background-color: var(--main-bg-color);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-color);
+                    font-size: 0.9rem;
+                }
+                select option {
+                    background-color: var(--main-bg-color);
+                    color: var(--text-color);
+                }
+                .activeSubs {
+                    font-size: 0.75rem;
+                    color: var(--label-color);
+                    font-family: monospace;
+                }
+                .log {
+                    margin-top: 4px;
+                    border: 1px solid var(--border-color);
+                    font-family: monospace;
+                    font-size: 0.8rem;
+                }
+                .logHeader {
+                    display: flex;
+                    justify-content: space-between;
+                    padding: 4px 8px;
+                    border-bottom: 1px solid var(--border-color);
+                    color: var(--label-color);
+                    font-size: 0.75rem;
+                }
+                .clear {
+                    background: none;
+                    border: none;
+                    color: var(--label-color);
+                    cursor: pointer;
+                    font-size: 0.75rem;
+                    padding: 0;
+                }
+                .entry {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 6px;
+                    padding: 5px 8px;
+                    border-bottom: 1px solid var(--secondary-border-color);
+                }
+                .ets { color: var(--label-color); }
+                .echar { font-weight: bold; }
+                .eres { flex-basis: 100%; }
             `}</style>
         </div>
     )

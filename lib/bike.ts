@@ -178,7 +178,7 @@ export class Bike {
     }
 
     async unlockBike(): Promise<void> {
-        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]), false)
+        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]), true)
     }
 
     async rawRead(characteristic: Characteristic, decrypt = true): Promise<Uint8Array> {
@@ -204,7 +204,26 @@ export class Bike {
             write: p.write,
             notify: p.notify,
             indicate: p.indicate,
+            authenticatedSignedWrites: p.authenticatedSignedWrites,
         }
+    }
+
+    async rawSubscribe(characteristic: Characteristic, callback: (data: Uint8Array) => void, decrypt = true): Promise<void> {
+        const bluetoothService = await this.server.getPrimaryService(characteristic.service)
+        const char = await bluetoothService.getCharacteristic(characteristic.id)
+        char.addEventListener('characteristicvaluechanged', (event) => {
+            const value = (event.target as BluetoothRemoteGATTCharacteristic).value
+            if (!value) return
+            const raw = new Uint8Array(value.buffer)
+            callback(decrypt ? this.decrypt(raw) : raw)
+        })
+        await char.startNotifications()
+    }
+
+    async rawUnsubscribe(characteristic: Characteristic): Promise<void> {
+        const bluetoothService = await this.server.getPrimaryService(characteristic.service)
+        const char = await bluetoothService.getCharacteristic(characteristic.id)
+        await char.stopNotifications()
     }
 
     async playSound(id: number) {
