@@ -84,15 +84,25 @@ function tryDecode(testId: string, data: Uint8Array): string | undefined {
     if (testId === 'bikeinfo-motor-battery-level-read' || testId === 'bikeinfo-module-battery-level-read') {
         return `${data[0]}%`
     }
-    if (testId.includes('firmware') || testId === 'bikeinfo-frame-number-read') {
+    if (testId.includes('firmware') || testId === 'bikeinfo-frame-number-read' || testId === 'bikeinfo-pcba-hardware-read') {
         try {
             const text = new TextDecoder().decode(data).replace(/\0/g, '').trim()
             if (text) return text
         } catch { /* ignore */ }
     }
-    if (testId === 'movement-distance-read' && data.length >= 4) {
-        const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    if (testId === 'movement-distance-read' && data.length > 0) {
+        // Trailing zero bytes are stripped by the decrypt function; pad back to 4 bytes before reading LE uint32
+        const padded = new Uint8Array(4)
+        padded.set(data.slice(0, Math.min(4, data.length)))
+        const view = new DataView(padded.buffer)
         return `${(view.getUint32(0, true) / 10).toFixed(1)} km`
+    }
+    if (testId === 'bikestate-clock-read' && data.length > 0) {
+        const padded = new Uint8Array(4)
+        padded.set(data.slice(0, Math.min(4, data.length)))
+        const view = new DataView(padded.buffer)
+        const ts = view.getUint32(0, true)
+        return new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
     }
     if (testId === 'movement-power-level-read') {
         const labels: Record<number, string> = { 0: 'Off', 1: '1', 2: '2', 3: '3', 4: '4', 5: 'Max' }
@@ -118,7 +128,11 @@ interface OpResult {
     timestamp: string
 }
 
-async function executeTestOp(bike: RawBikeInterface, test: CompatibilityTest): Promise<OpResult> {
+async function executeTestOp(
+    bike: RawBikeInterface,
+    test: CompatibilityTest,
+    onProgress?: (liveRawHex: string) => void,
+): Promise<OpResult> {
     const op = test.operation
     const start = Date.now()
     const timestamp = new Date().toISOString()
@@ -135,16 +149,18 @@ async function executeTestOp(bike: RawBikeInterface, test: CompatibilityTest): P
         const data = await bike.rawReadWrite(test.characteristic, new Uint8Array(op.payload), op.encrypt, op.timeout)
         return { rawHex: fmtBytes(data), decodedValue: tryDecode(test.id, data), durationMs: Date.now() - start, timestamp }
     }
-    // subscribe
+    // subscribe — fire onProgress on each notification so the row updates live
     const notifications: string[] = []
+    onProgress?.('')
     await bike.rawSubscribe(test.characteristic, (data) => {
         const dec = tryDecode(test.id, data)
-        notifications.push(fmtBytes(data) + (dec ? ` (${dec})` : ''))
+        notifications.push(fmtBytes(data) + (dec ? `  —  ${dec}` : ''))
+        onProgress?.(notifications.join('\n'))
     }, op.decrypt)
     await delay(op.durationMs)
     await bike.rawUnsubscribe(test.characteristic)
     return {
-        rawHex: notifications.length > 0 ? notifications.join(' | ') : '(no notification received)',
+        rawHex: notifications.length > 0 ? notifications.join('\n') : '',
         durationMs: Date.now() - start,
         timestamp,
     }
@@ -246,7 +262,7 @@ function TestRow({ test, result, isRunning, onRun, expanded, onToggle }: {
                 .failReason { margin: 0 0 4px; color: #dc3545; font-size: 0.78rem; }
                 .fwNote { margin: 0 0 4px; color: var(--label-color); font-style: italic; font-size: 0.78rem; }
                 .res { margin-top: 6px; font-family: monospace; font-size: 0.78rem; display: flex; flex-direction: column; gap: 3px; }
-                .hex { color: var(--label-color); word-break: break-all; }
+                .hex { color: var(--label-color); word-break: break-all; white-space: pre-line; }
                 .decoded { color: var(--active-color, #007bff); font-weight: bold; }
                 .errMsg { color: #dc3545; }
                 .timing { color: var(--label-color); font-size: 0.72rem; }
@@ -371,6 +387,107 @@ function BikeConnector({ credentials, connecting, error, onConnect, onFakeBike }
     )
 }
 
+// ─── subscribe prep modal ─────────────────────────────────────────────────────
+
+function SubscribePrepModal({ testId, onStart, onCancel }: {
+    testId: string | null
+    onStart: () => void
+    onCancel: () => void
+}) {
+    const test = testId ? COMPATIBILITY_TESTS.find(t => t.id === testId) ?? null : null
+    if (!test || test.operation.type !== 'subscribe') return null
+    const durationSec = test.operation.durationMs / 1000
+    return (
+        <Modal open onClose={onCancel} title={test.name}>
+            <p style={{ fontSize: '0.95rem', margin: '0 0 12px' }}>
+                {test.physicalConfirmPrompt}
+            </p>
+            <p style={{ fontSize: '0.83rem', color: 'var(--label-color)', margin: 0 }}>
+                The {durationSec}-second listen window will start when you press Start.
+                Notifications will appear live in the test row.
+            </p>
+            <ModalConfirmOrDecline
+                onCancel={onCancel}
+                onConfirm={onStart}
+                confirmText={`Start (${durationSec}s)`}
+            />
+        </Modal>
+    )
+}
+
+// ─── physical confirm modal ───────────────────────────────────────────────────
+
+function PhysicalConfirmModal({ test, result, onConfirm, onCancel }: {
+    test: CompatibilityTest | null
+    result?: TestResult
+    onConfirm: () => void
+    onCancel: () => void
+}) {
+    if (!test) return null
+    const isSubscribe = test.operation.type === 'subscribe'
+    const rawHex = result?.rawHex ?? ''
+    const notifLines = rawHex ? rawHex.split('\n') : []
+    const durationSec = isSubscribe
+        ? (test.operation as { durationMs: number }).durationMs / 1000
+        : 0
+    return (
+        <Modal open onClose={onCancel} title='Physical Confirmation'>
+            <p style={{ fontWeight: 'bold', marginBottom: 6 }}>{test.name}</p>
+            {isSubscribe ? (
+                <>
+                    <p style={{ fontSize: '0.83rem', color: 'var(--label-color)', margin: '0 0 10px' }}>
+                        {durationSec}s window closed.{' '}
+                        {notifLines.length > 0
+                            ? `${notifLines.length} notification${notifLines.length > 1 ? 's' : ''} received:`
+                            : 'No notifications were received.'}
+                    </p>
+                    {notifLines.length > 0 && (
+                        <div className='notifBox'>
+                            {notifLines.map((line, i) => (
+                                <div key={i} className='notifLine'>{line}</div>
+                            ))}
+                        </div>
+                    )}
+                    <p style={{ marginTop: 12, fontSize: '0.9rem' }}>
+                        Did the notification(s) match your physical action?
+                    </p>
+                </>
+            ) : (
+                <>
+                    <p style={{ fontSize: '0.9rem', margin: '0 0 8px' }}>
+                        {test.physicalConfirmPrompt}
+                    </p>
+                    {rawHex && (
+                        <p style={{ fontFamily: 'monospace', fontSize: '0.78rem', color: 'var(--label-color)', wordBreak: 'break-all', margin: 0 }}>
+                            Raw: {rawHex}
+                        </p>
+                    )}
+                </>
+            )}
+            <ModalConfirmOrDecline
+                onCancel={onCancel}
+                onConfirm={onConfirm}
+                confirmText={isSubscribe ? 'Yes, it matched' : 'Yes, it worked'}
+            />
+            <style jsx>{`
+                .notifBox {
+                    width: 100%; text-align: left;
+                    border: 1px solid var(--border-color, #ddd);
+                    background: rgba(128,128,128,0.04);
+                    font-family: monospace; font-size: 0.8rem;
+                    max-height: 140px; overflow-y: auto;
+                }
+                .notifLine {
+                    padding: 5px 10px;
+                    border-bottom: 1px solid var(--secondary-border-color, #eee);
+                    color: var(--text-color);
+                }
+                .notifLine:last-child { border-bottom: none; }
+            `}</style>
+        </Modal>
+    )
+}
+
 // ─── main tester ──────────────────────────────────────────────────────────────
 
 function CompatibilityTesterMain({ bike, onDisconnect }: {
@@ -381,12 +498,14 @@ function CompatibilityTesterMain({ bike, onDisconnect }: {
     const [isRunning, setIsRunning] = useState(false)
     const [runStats, setRunStats] = useState({ completed: 0, total: 0 })
     const [physicalConfirmTestId, setPhysicalConfirmTestId] = useState<string | null>(null)
+    const [subscribePrepTestId, setSubscribePrepTestId] = useState<string | null>(null)
     const [showRunAllWarning, setShowRunAllWarning] = useState(false)
     const [selectedFirmware, setSelectedFirmware] = useState('unknown')
     const [expandedTestId, setExpandedTestId] = useState<string | null>(null)
 
     const abortRef = useRef<AbortController | null>(null)
     const confirmResolveRef = useRef<((answer: boolean) => void) | null>(null)
+    const subscribePrepResolveRef = useRef<((start: boolean) => void) | null>(null)
 
     const startRun = useCallback(async (testIds: string[], forceKnownFail = false) => {
         const controller = new AbortController()
@@ -407,8 +526,28 @@ function CompatibilityTesterMain({ bike, onDisconnect }: {
                 continue
             }
 
+            const isSubscribe = test.operation.type === 'subscribe'
+            if (isSubscribe) setExpandedTestId(testId)
+
+            // For subscribe tests: show prep modal so the user knows what to do before the window opens
+            if (isSubscribe && test.requiresPhysicalConfirm) {
+                setSubscribePrepTestId(testId)
+                const shouldStart = await new Promise<boolean>(resolve => {
+                    subscribePrepResolveRef.current = resolve
+                })
+                setSubscribePrepTestId(null)
+                if (!shouldStart) {
+                    setResults(prev => ({ ...prev, [testId]: { testId, status: 'skipped' } }))
+                    completed++
+                    setRunStats(s => ({ ...s, completed }))
+                    continue
+                }
+            }
+
             try {
-                const opResult = await executeTestOp(bike, test)
+                const opResult = await executeTestOp(bike, test, isSubscribe ? (liveHex) => {
+                    setResults(prev => ({ ...prev, [testId]: { ...prev[testId]!, rawHex: liveHex } }))
+                } : undefined)
                 if (controller.signal.aborted) break
 
                 if (test.requiresPhysicalConfirm) {
@@ -454,8 +593,17 @@ function CompatibilityTesterMain({ bike, onDisconnect }: {
 
     const handleStop = () => {
         abortRef.current?.abort()
+        subscribePrepResolveRef.current?.(false)
+        subscribePrepResolveRef.current = null
+        setSubscribePrepTestId(null)
         confirmResolveRef.current?.(false)
         confirmResolveRef.current = null
+    }
+
+    const handleSubscribePrep = (start: boolean) => {
+        subscribePrepResolveRef.current?.(start)
+        subscribePrepResolveRef.current = null
+        setSubscribePrepTestId(null)
     }
 
     const handlePhysicalConfirm = (answer: boolean) => {
@@ -582,28 +730,17 @@ function CompatibilityTesterMain({ bike, onDisconnect }: {
                 />
             </Modal>
 
-            <Modal
-                open={confirmTest != null}
-                onClose={() => handlePhysicalConfirm(false)}
-                title='Physical Confirmation'
-            >
-                {confirmTest && (
-                    <>
-                        <p><b>{confirmTest.name}</b></p>
-                        <p>{confirmTest.physicalConfirmPrompt}</p>
-                        {results[confirmTest.id]?.rawHex && (
-                            <p style={{ fontFamily: 'monospace', fontSize: '0.78rem', color: 'var(--label-color)', wordBreak: 'break-all' }}>
-                                Raw: {results[confirmTest.id].rawHex}
-                            </p>
-                        )}
-                    </>
-                )}
-                <ModalConfirmOrDecline
-                    onCancel={() => handlePhysicalConfirm(false)}
-                    onConfirm={() => handlePhysicalConfirm(true)}
-                    confirmText='Yes, it worked'
-                />
-            </Modal>
+            <SubscribePrepModal
+                testId={subscribePrepTestId}
+                onStart={() => handleSubscribePrep(true)}
+                onCancel={() => handleSubscribePrep(false)}
+            />
+            <PhysicalConfirmModal
+                test={confirmTest}
+                result={confirmTest ? results[confirmTest.id] : undefined}
+                onConfirm={() => handlePhysicalConfirm(true)}
+                onCancel={() => handlePhysicalConfirm(false)}
+            />
 
             <style jsx>{`
                 .main { width: 100%; max-width: 760px; }
