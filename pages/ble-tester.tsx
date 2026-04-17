@@ -120,6 +120,9 @@ export default function BleTester() {
     return (
         <div className='page'>
             <h1>Raw BLE Tester</h1>
+            <p className='navLink'>
+                For structured community testing → <Link href='/ble-compatibility'>BLE Compatibility Tester</Link>
+            </p>
 
             {bike ? (
                 <>
@@ -151,6 +154,7 @@ export default function BleTester() {
                     min-height: 100vh;
                 }
                 h1 { margin-bottom: 0.25rem; }
+                .navLink { font-size: 0.85rem; color: var(--label-color); margin: 0 0 1rem; }
                 .connected {
                     color: var(--label-color);
                     margin: 0 0 1.5rem;
