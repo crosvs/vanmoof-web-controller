@@ -134,8 +134,8 @@ All reads and writes use AES-ECB with the bike's `encryptionKey` from the VanMoo
 
 | Char (suffix) | Name | GATT Properties | Status | Notes |
 |---|---|---|---|---|
-| `6acc5511` | FIRMWARE_METADATA | unknown | ❓ Unknown | Not tested. Likely describes firmware block layout for OTA. |
-| `6acc5512` | FIRMWARE_BLOCK | unknown | ❓ Unknown | Not tested. Likely the data channel for OTA firmware writes. |
+| `6acc5511` | FIRMWARE_METADATA | write | ✅ Working (bell upload) | Initiates a data transfer. For bell sound upload: write 9 bytes encrypted — command byte `0x19`, 4-byte big-endian file size, 4-byte big-endian CRC32. Likely also used for OTA firmware (command byte unknown). |
+| `6acc5512` | FIRMWARE_BLOCK | write | ✅ Working (bell upload) | Receives raw (unencrypted) data chunks, 240 bytes at a time. Used by both bell sound upload and presumably OTA firmware. No per-chunk acknowledgement — bike buffers the stream. |
 
 ---
 
@@ -232,6 +232,101 @@ Write `[id, 0x01]` encrypted to `6acc5571`.
 
 IDs not listed above (`0x04`, `0x05`, `0x08`–`0x09`, `0x0C`–`0x0D`, `0x10`–`0x11`, `0x1B`+) are
 untested — they may produce sounds or be silent. Contributions welcome.
+
+---
+
+#### Custom Bell Sound Upload
+
+The custom bell sound feature repurposes the **Firmware Service** (`6acc5510`) — the same channel used
+for OTA firmware updates — to stream arbitrary audio data into the bike's sound storage.
+
+##### What it replaces
+
+The uploaded sound occupies the **Foghorn / Ping** bell slot (`0x18`). After a successful upload,
+`BELL_SOUND` is set to `0x18` automatically. To revert to a built-in bell, write a different
+`BellTone` value to `BELL_SOUND`.
+
+##### File constraints
+
+| Constraint | Value | Why |
+|---|---|---|
+| Max final size | **400 000 bytes** | Bike's sound storage limit |
+| Format on-wire | **PCM 16-bit signed LE mono WAV** | Only format the bike accepts |
+| Best duration | **≤ 10 seconds** | Longer files require heavy downsampling |
+| Sample rate | Auto-selected | See table below |
+
+The app picks the highest sample rate that keeps the PCM payload under 400 KB:
+
+| Max duration | Sample rate chosen |
+|---|---|
+| ≤ ~4.5 s | 44 100 Hz |
+| ≤ ~9 s | 22 050 Hz |
+| ≤ ~12.5 s | 16 000 Hz |
+| ≤ ~18 s | 11 025 Hz |
+| ≤ ~25 s | 8 000 Hz |
+| longer | 6 000 Hz (minimum) |
+
+Input format is flexible — anything ffmpeg can decode works (MP3, AAC, FLAC, OGG, M4A, AIFF, …).
+Conversion runs entirely in the browser via **ffmpeg.wasm** (`@ffmpeg/core` loaded from unpkg).
+
+##### VanMoof file format (on-wire)
+
+Before upload, the raw PCM WAV is wrapped in a VanMoof-specific container:
+
+```
+Offset  Length  Value / Description
+──────  ──────  ──────────────────────────────────────────────────────
+     0       8  56 4D 5F 53 4F 55 4E 44  — ASCII "VM_SOUND" magic
+     8       4  FF FF FF FF              — purpose unknown (placeholder?)
+    12       1  01                       — version / file-type flag
+    13       4  58 58 58 58              — purpose unknown ("XXXX")
+    17       1  00                       — null separator
+    18       6  58 58 58 58 58 58        — purpose unknown ("XXXXXX")
+    24       4  <fileSize, little-endian> — byte length of the WAV that follows
+    28       n  <raw PCM WAV data>
+```
+
+Total header overhead: 28 bytes. Max `n`: ~399 972 bytes.
+
+##### BLE transfer protocol
+
+The upload uses two characteristics from the **Firmware Service** (`6acc5510`):
+
+**Step 1 — Initiate** — Write 9 bytes (encrypted) to `FIRMWARE_METADATA` (`6acc5511`):
+
+```
+Byte 0     : 0x19  — transfer-type command byte
+Bytes 1–4  : total file size (header + WAV), big-endian uint32
+Bytes 5–8  : CRC32 of entire buffer (header + WAV), big-endian uint32
+```
+
+**Step 2 — Stream chunks** — Write raw (unencrypted) 240-byte chunks to `FIRMWARE_BLOCK` (`6acc5512`),
+sequentially, until all bytes are sent. No acknowledgement between chunks — the bike buffers them.
+The buffer is **always padded to exactly 400 000 bytes** with zeros before chunking (see note below).
+
+**Step 3 — Activate** — Write `[0x18, 0x01]` encrypted to `BELL_SOUND` (`6acc5574`) to switch the
+active bell tone to the Foghorn slot, which now contains the uploaded sound.
+
+##### Why always upload 400 KB even for short sounds?
+
+The bike stores the sound in a **fixed-size 400 KB flash region**. When you upload a 50 KB sound,
+only those 50 KB are written. The remaining 350 KB still contain whatever was in flash before —
+typically the tail of the previous (longer) sound. If the bike's playback doesn't perfectly respect
+the size field in the VM_SOUND header, it reads into those stale bytes and you hear the old audio
+bleeding through at the end.
+
+Zero-padding the payload to the full 400 KB before upload overwrites the entire region.
+The VM_SOUND `fileSize` field still correctly marks where the real audio ends, and any bytes the
+bike reads past that point are `0x0000` PCM — silence. This adds upload time for short sounds
+(~20–40 s over BLE for the zero region) but eliminates the artifact entirely.
+
+##### Why the Firmware Service?
+
+The bike has no dedicated "sound upload" service. VanMoof re-used the firmware OTA channel (likely
+already in the codebase for firmware updates) for sound data. The `0x19` command byte in the
+initiation header presumably tells the bike to route the incoming data to sound storage rather than
+flash. `FIRMWARE_BLOCK` writes are unencrypted because the data is already wrapped in the
+VanMoof container format — the bike validates integrity via the CRC32 in the initiation header.
 
 ---
 
