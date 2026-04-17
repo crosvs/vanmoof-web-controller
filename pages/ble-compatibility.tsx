@@ -154,7 +154,7 @@ async function executeTestOp(
     onProgress?.('')
     await bike.rawSubscribe(test.characteristic, (data) => {
         const dec = tryDecode(test.id, data)
-        notifications.push(fmtBytes(data) + (dec ? `  —  ${dec}` : ''))
+        notifications.push(fmtBytes(data) + (dec ? `  --  ${dec}` : ''))
         onProgress?.(notifications.join('\n'))
     }, op.decrypt)
     await delay(op.durationMs)
@@ -507,6 +507,15 @@ function CompatibilityTesterMain({ bike, onDisconnect }: {
     const confirmResolveRef = useRef<((answer: boolean) => void) | null>(null)
     const subscribePrepResolveRef = useRef<((start: boolean) => void) | null>(null)
 
+    // Auto-fill firmware selector from the bike firmware read result
+    const detectedFirmware = results['bikeinfo-bike-firmware-read']?.decodedValue
+    useEffect(() => {
+        if (detectedFirmware) setSelectedFirmware(detectedFirmware)
+    }, [detectedFirmware])
+    const firmwareOptions = detectedFirmware && !FIRMWARE_VERSIONS.includes(detectedFirmware)
+        ? [detectedFirmware, ...FIRMWARE_VERSIONS]
+        : FIRMWARE_VERSIONS
+
     const startRun = useCallback(async (testIds: string[], forceKnownFail = false) => {
         const controller = new AbortController()
         abortRef.current = controller
@@ -670,7 +679,7 @@ function CompatibilityTesterMain({ bike, onDisconnect }: {
                     <label className='fw'>
                         Firmware:
                         <select value={selectedFirmware} onChange={e => setSelectedFirmware(e.target.value)}>
-                            {FIRMWARE_VERSIONS.map(v => <option key={v} value={v}>{v}</option>)}
+                            {firmwareOptions.map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
                     </label>
                 </div>

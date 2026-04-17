@@ -41,8 +41,9 @@ export const TEST_CATEGORIES: TestCategory[] = [
     'Security', 'Defense', 'Movement', 'BikeInfo', 'BikeState', 'Sound', 'Light',
 ]
 
-// Actual firmware string from BIKE_FIRMWARE_VERSION is "1.07.06" (not "1.7.6")
-export const FIRMWARE_VERSIONS = ['unknown', '1.07.06', '1.7.6', '1.8.2']
+// Firmware versions use the internal format as reported by BIKE_FIRMWARE_VERSION (e.g. "1.07.06").
+// Community convention writes this as "1.7.6" but the bike itself reports "1.07.06".
+export const FIRMWARE_VERSIONS = ['unknown', '1.07.06', '1.08.02']
 
 export const COMPATIBILITY_TESTS: CompatibilityTest[] = [
 
