@@ -41,4 +41,4 @@ public/workbox-*
 CLAUDE.md
 ble-cli/credentials.json
 /.claude
-/ble-cli
+ble-cli/van_moof_encryption_key.json
