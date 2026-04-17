@@ -98,6 +98,165 @@ Key REPL commands:
 
 ---
 
+### BLE Protocol Reference
+
+All characteristic UUIDs share the suffix `-e631-4069-944d-b8ca7598ad50`.
+The short form used below is the 8-character prefix only (e.g. `6acc5521`).
+
+#### Encryption
+
+All reads and writes use AES-ECB with the bike's `encryptionKey` from the VanMoof API.
+
+- **Encrypted write** — reads a nonce from `CHALLENGE` (6acc5501), builds a 16-byte payload
+  `AES(nonce[0..11] + data + padding)`, writes that to the target characteristic. Costs 1 extra
+  read round-trip per write.
+- **Encrypted read** — reads raw bytes from the characteristic, AES-decrypts, strips trailing zero
+  bytes. **Caution:** a value that decodes to a single `0x00` byte returns an empty array — check
+  `data[0] ?? 0` rather than `data[0]` to distinguish "zero" from "no data".
+- **Authentication** — on connect, writes a signed token to `KEY_INDEX` (6acc5502) that proves
+  possession of `encryptionKey` and `userKeyId`. Required before any encrypted read/write.
+- `passcode` in the VanMoof API response equals the first 6 bytes of `encryptionKey`.
+
+---
+
+#### Security Service — `6acc5500`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5501` | CHALLENGE | read | ✅ Working | Returns a 12-byte nonce used by every encrypted write. |
+| `6acc5502` | KEY_INDEX | write | ✅ Working | Authentication handshake — writes encrypted `userKeyId`. Must be the first operation after connect. |
+| `6acc5503` | BACKUP_CODE | read, write, notify, auth-signed-writes | ⚠️ Partial | Readable. Write (encrypted) is accepted by the firmware but triggers a **security disconnect** immediately after. The passcode value is the first 6 bytes of `encryptionKey` (`94ef010857f0` on tested bike); the correct write format is unknown. |
+| `6acc5505` | BIKE_MESSAGE | write, notify, auth-signed-writes | ❓ Unknown | Write (encrypted `01`) accepted, followed by a **security disconnect**. Likely a higher-level command channel (firmware update, diagnostics?). Format completely unknown. |
+
+---
+
+#### Firmware Service — `6acc5510`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5511` | FIRMWARE_METADATA | unknown | ❓ Unknown | Not tested. Likely describes firmware block layout for OTA. |
+| `6acc5512` | FIRMWARE_BLOCK | unknown | ❓ Unknown | Not tested. Likely the data channel for OTA firmware writes. |
+
+---
+
+#### Defense Service — `6acc5520`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5521` | LOCK_STATE | read, write, notify, auth-signed-writes | ✅ Working (read/notify) | Decrypts to 1 byte: `0`=Unlocked, `1`=Locked, `2`=Standby (unobserved), `3`=Alarm (unobserved). Notifications fire reliably on physical lock/unlock. **Write (encrypted `00`) is accepted by the firmware but silently ignored** — the lock state does not change. Read returns `0x00 ba` when locked (meaning of second byte unknown). |
+| `6acc5522` | UNLOCK_REQUEST | auth-signed-writes, notify | ❌ Permanently blocked | Requires ATT Signed Write Command (BLE opcode `0xD2`). Web Bluetooth only exposes Write Request (`0x12`) and Write Without Response (`0x52`). Chrome refuses with "GATT operation not permitted" because neither `write` nor `write-without-response` is in the GATT properties. Tested on Chrome/Windows, Chrome/Android, and Bleak/Windows — all blocked. The only viable path is BlueZ on Linux after BLE bonding. |
+| `6acc5523` | ALARM_STATE | unknown | ❓ Unknown | Not tested. Likely the current alarm state (triggered/not). Properties not confirmed. |
+| `6acc5524` | ALARM_MODE | write | ✅ Working | Encrypted write `00` disables the alarm (same effect as the official VanMoof app). Encrypted write `01` presumably re-enables it (untested). Does **not** unlock the bike. |
+
+---
+
+#### Movement Service — `6acc5530`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5531` | DISTANCE | read | ✅ Working | 4-byte little-endian uint32, divide by 10 for km. Decrypt strips leading zeros — pad to 4 bytes before parsing. |
+| `6acc5532` | SPEED | read, notify (experimental) | ⚠️ Partial | Raw byte, value while stationary is `0` (decrypt returns empty array — use `data[0] ?? 0`). Notify property is present but behaviour unconfirmed; subscription attempted but no notifications observed at rest. |
+| `6acc5533` | UNIT_SYSTEM | unknown | ❓ Unknown | Not tested. Likely toggles km/mi display on the bike's own screen. |
+| `6acc5534` | POWER_LEVEL | read, write | ✅ Working | 1 byte: `0`=Off, `1`–`4`=levels 1–4, `5`=Max/Sport. Encrypted read/write. Writing power level `5` unlocks a hidden Sport mode not available in the stock VanMoof app. |
+| `6acc5535` | SPEED_LIMIT | read, write | ✅ Working | 1 byte: `0`=EU (25 km/h), `1`=US (32 km/h), `2`=JP (24 km/h), `255`=No Limit (37 km/h). Encrypted read/write. |
+| `6acc5536` | E_SHIFTER_GEAR | unknown | ❓ Unknown | Not tested. Presumably the current gear on bikes with the optional electronic shifter (S3/X3 have 3-speed). |
+| `6acc5537` | E_SHIFTING_POINTS | unknown | ❓ Unknown | Not tested. Likely the speed thresholds at which the e-shifter changes gear — potentially writable to tune shift points. |
+| `6acc5538` | E_SHIFTER_MODE | unknown | ❓ Unknown | Not tested. Possibly enables/disables automatic shifting or manual override. |
+
+---
+
+#### Bike Info Service — `6acc5540`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5541` | MOTOR_BATTERY_LEVEL | read | ✅ Working | 1 byte, percentage (0–100). |
+| `6acc5542` | MOTOR_BATTERY_STATE | unknown | ❓ Unknown | Not tested. Likely charging/discharging/full state similar to the module battery. |
+| `6acc5543` | MODULE_BATTERY_LEVEL | read | ✅ Working | 1 byte, percentage. Subject to the zero-strip bug when at 0% — use `data[0] ?? 0`. |
+| `6acc5544` | MODULE_BATTERY_STATE | unknown | ❓ Unknown | Not tested. Module = the Bluetooth/GSM controller module, separate from the drive motor. |
+| `6acc554a` | BIKE_FIRMWARE_VERSION | read | ✅ Working | UTF-8 string, e.g. `1.8.2`. |
+| `6acc554b` | BLE_CHIP_FIRMWARE_VERSION | unknown | ❓ Unknown | Not tested. Firmware version of the on-board BLE chip (separate from main firmware). |
+| `6acc554c` | CONTROLLER_FIRMWARE_VERSION | unknown | ❓ Unknown | Not tested. Motor controller firmware. |
+| `6acc554d` | PCBA_HARDWARE_VERSION | unknown | ❓ Unknown | Not tested. Hardware revision of the printed circuit board assembly. |
+| `6acc554e` | GSM_FIRMWARE_VERSION | unknown | ❓ Unknown | Not tested. Firmware of the cellular (GSM) module used for theft tracking. |
+| `6acc554f` | E_SHIFTER_FIRMWARE_VERSION | unknown | ❓ Unknown | Not tested. Only present on bikes with the electronic shifter option. |
+| `6acc5550` | BATTERY_FIRMWARE_VERSION | unknown | ❓ Unknown | Not tested. Smart battery pack firmware version. |
+| `6acc5551` | _(unknown)_ | unknown | ❓ Unknown | UUID present in the service but purpose entirely unknown. |
+| `6acc5552` | FRAME_NUMBER | read | ✅ Working | UTF-8 string — the bike's unique frame/serial number. |
+
+---
+
+#### Bike State Service — `6acc5560`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5561` | MODULE_MODE | read, notify, auth-signed-writes | ⚠️ Partial | Readable and subscribable, but has no regular `write` property (only `auth-signed-writes`). Raw value meaning unknown — likely indicates what mode the module is in (normal, ship mode, update mode, etc.). |
+| `6acc5562` | MODULE_STATE | read, write, notify, auth-signed-writes | ❓ Unknown | Readable and writable but decoded meaning unknown. May control whether the module is awake or in low-power state. |
+| `6acc5563` | ERRORS | unknown | ❓ Unknown | Not tested. Likely a bitmask or list of active error codes. Could be useful for diagnostics. |
+| `6acc5564` | WHEEL_SIZE | unknown | ❓ Unknown | Not tested. Probably the configured wheel circumference used for odometer and speed calculations. |
+| `6acc5567` | CLOCK | unknown | ❓ Unknown | Not tested. Possibly the bike's internal RTC — may be writable to sync time. |
+
+---
+
+#### Sound Service — `6acc5570`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5571` | PLAY_SOUND | write | ✅ Working | Write two bytes `[sound_id, 0x01]` (encrypted) to trigger a sound. See sound table below. |
+| `6acc5572` | SOUND_VOLUME | unknown | ❓ Unknown | Not tested. Likely a 1-byte volume level. |
+| `6acc5574` | BELL_SOUND | read, write | ✅ Working | 1 byte selecting the bell slot: `0x0a`=Sonar, `0x16`=Bell, `0x17`=Party, `0x18`=Foghorn/Custom. Writing `0x18` activates the custom uploaded sound. |
+
+##### Known Sound IDs (PLAY_SOUND)
+
+Write `[id, 0x01]` encrypted to `6acc5571`.
+
+| ID | Name | Duration |
+|----|------|----------|
+| `0x01` | Click | Short |
+| `0x02` | Error | Short |
+| `0x03` | Pling | Short |
+| `0x06` | Cling clong | Short |
+| `0x07` | Charging noise | Long |
+| `0x0A` | Bell | Short |
+| `0x0B` | Whistle | Short |
+| `0x0E` | Alarm | Long |
+| `0x0F` | Alarm stage 2 | Long |
+| `0x12` | Charging.. | Long |
+| `0x13` | Updating.. | Long |
+| `0x14` | Wuup | Short |
+| `0x15` | Update complete | Long |
+| `0x16` | Normal bike bell | Short |
+| `0x17` | Bell Tada | Short |
+| `0x18` | BOAT | Short |
+| `0x19` | Success but error | Short |
+| `0x1A` | Make weird noises | Long |
+
+IDs not listed above (`0x04`, `0x05`, `0x08`–`0x09`, `0x0C`–`0x0D`, `0x10`–`0x11`, `0x1B`+) are
+untested — they may produce sounds or be silent. Contributions welcome.
+
+---
+
+#### Light Service — `6acc5580`
+
+| Char (suffix) | Name | GATT Properties | Status | Notes |
+|---|---|---|---|---|
+| `6acc5581` | LIGHT_MODE | unknown | ❓ Unknown | Not tested. Likely controls front/rear light on/off or automatic mode. The bike model is known to report a `'Dark'` colour scheme — other values unknown. |
+| `6acc5584` | SENSOR | unknown | ❓ Unknown | Not tested. Possibly the ambient light sensor reading used for auto-lighting. |
+
+---
+
+#### Known-to-fail commands
+
+| Command | Result | Why |
+|---------|--------|-----|
+| Write to `UNLOCK_REQUEST` (6acc5522) | `GATT operation not permitted` | Firmware requires **ATT Signed Write Command** (opcode `0xD2`), which needs a CSRK session key from BLE bonding. Web Bluetooth spec only exposes Write Request (`0x12`) and Write Without Response (`0x52`). Chrome, Edge, and all Web Bluetooth implementations reject it at the protocol level before even sending the packet. |
+| Encrypted write to `LOCK_STATE` (6acc5521) | Accepted, no effect | The firmware accepts the write (no error) but does not change the lock state. The characteristic has `write` in its GATT properties, but the firmware ignores non-signed writes for the actual lock operation. Likely the `write` property is used for something else (mode change?). |
+| Encrypted write to `BACKUP_CODE` (6acc5503) | Accepted, then security disconnect | The characteristic accepts standard writes, but the firmware immediately drops the BLE connection after receiving the payload. The correct message format is unknown — the field is likely used by the VanMoof app during key provisioning or theft recovery. |
+| Encrypted write to `BIKE_MESSAGE` (6acc5505) | Accepted, then security disconnect | Same pattern as BACKUP_CODE. Payload `01` was tried. Suspected to be a privileged command channel for factory/service use. Format unknown. |
+| Write to `MODULE_MODE` (6acc5561) | `GATT operation not permitted` | The characteristic only has `authenticated-signed-writes` for writes — no standard `write` or `write-without-response` property. Same root cause as UNLOCK_REQUEST: requires BLE-layer signing. |
+| BLE bonding on Windows via WinRT | Bonds successfully, still can't send signed writes | Windows pairs and establishes a CSRK, but WinRT's Bluetooth API exposes no method to send an ATT Signed Write Command. Bleak inherits this limitation. Linux + BlueZ is currently the only platform with signed-write support after bonding. |
+
+---
+
 ### Development
 
 This project is build using [NextJS (a React framework)](https://nextjs.org) and deployed on [vercel](https://vercel.com)
