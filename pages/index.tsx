@@ -1,5 +1,6 @@
 import type { NextPage } from 'next'
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import type { Bike } from '../lib/bike'
 import { Api } from '../lib/api'
 import type { BikeControlsArgs } from '../components/Controls'
@@ -117,6 +118,12 @@ const Home: NextPage = () => {
               />
             : <Login setCredentials={setCredentials} />
         }
+        <p className='devTools'>
+          Developer tools:
+          {' '}<Link href='/bike-panel'>Bike Panel</Link>
+          {' · '}<Link href='/ble-tester'>BLE Tester</Link>
+          {' · '}<Link href='/ble-compatibility'>BLE Compatibility</Link>
+        </p>
       </main>
 
       <Footer />
@@ -151,6 +158,12 @@ const Home: NextPage = () => {
         @media (prefers-color-scheme: dark) {
           .previewLight {display: none !important;}
           .previewDark {display: block !important;}
+        }
+
+        .devTools {
+          font-size: 0.8rem;
+          color: var(--label-color);
+          margin-top: 2rem;
         }
       `}</style>
     </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BikeContext, Bike, PowerLevel as PowerLevelEnum, SpeedLimit as SpeedLimitEnum, BellTone as BellToneEnum } from '../lib/bike'
+import { BikeContext, Bike, PowerLevel as PowerLevelEnum, SpeedLimit as SpeedLimitEnum, BellTone as BellToneEnum, LockState as LockStateEnum } from '../lib/bike'
 import { SoundBoard } from './SoundBoard'
 import { ShareBike } from './sharing/ShareBike'
 import { Button } from './Button'
@@ -19,6 +19,7 @@ export default function BikeControls({ bike, api, disconnect }: BikeControlsArgs
         <BikeContext.Provider value={bike}>
             <ApiContext.Provider value={api}>
                 <BikeStats bike={bike} />
+                <UnlockBike bike={bike} />
                 <SpeedLimit bike={bike} />
                 <PowerLevel bike={bike} />
                 <BellTone bike={bike} />
@@ -74,6 +75,48 @@ function BikeStats({ bike }: { bike: Bike }) {
                     }
                 `}</style>
             </div>
+        </>
+    )
+}
+
+function UnlockBike({ bike }: { bike: Bike }) {
+    const [lockState, setLockState] = useState<LockStateEnum | undefined>(undefined)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | undefined>(undefined)
+
+    useEffect(() => {
+        bike.getLockState().then(setLockState).catch(() => {})
+    }, [])
+
+    const unlock = async () => {
+        setLoading(true)
+        setError(undefined)
+        try {
+            await bike.unlockBike()
+            const newState = await bike.getLockState()
+            setLockState(newState)
+        } catch (e) {
+            setError(`Failed to unlock bike: ${e instanceof Error ? e.message : String(e)}`)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const stateLabel =
+        lockState === LockStateEnum.Unlocked ? 'Unlocked' :
+        lockState === LockStateEnum.Locked   ? 'Locked'   :
+        lockState === LockStateEnum.Standby  ? 'Standby'  :
+        lockState === LockStateEnum.Alarm    ? 'Alarm'    :
+        lockState !== undefined              ? 'Unknown'  : undefined
+
+    return (
+        <>
+            <h3>Lock</h3>
+            {lockState !== undefined && <p>Status: <b>{stateLabel} ({lockState})</b></p>}
+            <Button onClick={unlock} disabled={loading}>
+                {loading ? 'Unlocking...' : 'Unlock bike'}
+            </Button>
+            {error && <p style={{ color: 'red' }}>{error}</p>}
         </>
     )
 }

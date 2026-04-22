@@ -28,6 +28,13 @@ export enum SpeedLimit {
     NO_LIMIT = 3,
 }
 
+export enum LockState {
+    Unlocked = 0,
+    Locked = 1,
+    Standby = 2,
+    Alarm = 3,
+}
+
 const wait = (timeout: number): Promise<never> =>
     new Promise(res => setTimeout(res, timeout))
 
@@ -97,15 +104,19 @@ export class Bike {
         return await this.queue.push(() => this.bluetoothReadWithoutQueue(characteristic, decrypt))
     }
 
-    private async bluetoothWriteWithoutQueue(characteristic: Characteristic, data: Uint8Array, encrypted = true) {
+    private async bluetoothWriteWithoutQueue(characteristic: Characteristic, data: Uint8Array, encrypted = true, withoutResponse = false) {
         const payload = encrypted ? await this.makeEncryptedPayloadWithoutQueue(data) : data
         const bluetoothService = await this.server.getPrimaryService(characteristic.service)
         const bluetoothCharacteristic = await bluetoothService.getCharacteristic(characteristic.id)
-        await bluetoothCharacteristic.writeValue(payload)
+        if (withoutResponse) {
+            await (bluetoothCharacteristic as any).writeValueWithoutResponse(payload)
+        } else {
+            await bluetoothCharacteristic.writeValue(payload)
+        }
     }
 
-    private async bluetoothWrite(characteristic: Characteristic, data: Uint8Array, encrypted = true) {
-        await this.queue.push(() => this.bluetoothWriteWithoutQueue(characteristic, data, encrypted))
+    private async bluetoothWrite(characteristic: Characteristic, data: Uint8Array, encrypted = true, withoutResponse = false) {
+        await this.queue.push(() => this.bluetoothWriteWithoutQueue(characteristic, data, encrypted, withoutResponse))
     }
 
     private async bluetoothReadWrite(characteristic: Characteristic, data: Uint8Array, { encryptedAndDecrypt = true, timeout = 0 }): Promise<Uint8Array> {
@@ -159,6 +170,60 @@ export class Bike {
         // Re-authenticate
         await this.authenticate(false)
         console.log('success reconnecting..')
+    }
+
+    async getLockState(): Promise<LockState> {
+        const result = await this.bluetoothRead(LOCK_STATE)
+        return result[0] as LockState
+    }
+
+    async unlockBike(): Promise<void> {
+        await this.bluetoothWrite(UNLOCK_REQUEST, new Uint8Array([0x02, 0x01]), true)
+    }
+
+    async rawRead(characteristic: Characteristic, decrypt = true): Promise<Uint8Array> {
+        return await this.bluetoothRead(characteristic, decrypt)
+    }
+
+    async rawWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true, withoutResponse = false): Promise<void> {
+        await this.bluetoothWrite(characteristic, data, encrypt, withoutResponse)
+    }
+
+    async rawReadWrite(characteristic: Characteristic, data: Uint8Array, encrypt = true, timeout = 0): Promise<Uint8Array> {
+        return await this.bluetoothReadWrite(characteristic, data, { encryptedAndDecrypt: encrypt, timeout })
+    }
+
+    async rawCharacteristicProperties(characteristic: Characteristic): Promise<Record<string, boolean>> {
+        const bluetoothService = await this.server.getPrimaryService(characteristic.service)
+        const char = await bluetoothService.getCharacteristic(characteristic.id)
+        const p = char.properties
+        return {
+            broadcast: p.broadcast,
+            read: p.read,
+            writeWithoutResponse: p.writeWithoutResponse,
+            write: p.write,
+            notify: p.notify,
+            indicate: p.indicate,
+            authenticatedSignedWrites: p.authenticatedSignedWrites,
+        }
+    }
+
+    async rawSubscribe(characteristic: Characteristic, callback: (data: Uint8Array) => void, decrypt = true): Promise<void> {
+        const bluetoothService = await this.server.getPrimaryService(characteristic.service)
+        const char = await bluetoothService.getCharacteristic(characteristic.id)
+        char.addEventListener('characteristicvaluechanged', (event) => {
+            const value = (event.target as BluetoothRemoteGATTCharacteristic).value
+            if (!value) return
+            const raw = new Uint8Array(value.buffer)
+            callback(decrypt ? this.decrypt(raw) : raw)
+        })
+        await char.startNotifications()
+    }
+
+    async rawUnsubscribe(characteristic: Characteristic): Promise<void> {
+        const bluetoothService = await this.server.getPrimaryService(characteristic.service)
+        const char = await bluetoothService.getCharacteristic(characteristic.id)
+        await char.stopNotifications()
     }
 
     async playSound(id: number) {
@@ -334,3 +399,45 @@ export const SENSOR = c(LIGHT_SERVICE, "6acc5584-e631-4069-944d-b8ca7598ad50")
 const FIRMWARE_SERVICE = "6acc5510-e631-4069-944d-b8ca7598ad50"
 export const FIRMWARE_METADATA = c(FIRMWARE_SERVICE, "6acc5511-e631-4069-944d-b8ca7598ad50")
 export const FIRMWARE_BLOCK = c(FIRMWARE_SERVICE, "6acc5512-e631-4069-944d-b8ca7598ad50")
+
+export const CHARACTERISTICS: Record<string, Characteristic> = {
+    // Security
+    'CHALLENGE':                   CHALLENGE,
+    'KEY_INDEX':                   KEY_INDEX,
+    'BACKUP_CODE':                 BACKUP_CODE,
+    'BIKE_MESSAGE':                BIKE_MESSAGE,
+    // Defense
+    'LOCK_STATE':                  LOCK_STATE,
+    'UNLOCK_REQUEST':              UNLOCK_REQUEST,
+    'ALARM_STATE':                 ALARM_STATE,
+    'ALARM_MODE':                  ALARM_MODE,
+    // Movement
+    'DISTANCE':                    DISTANCE,
+    'SPEED':                       SPEED,
+    'UNIT_SYSTEM':                 UNIT_SYSTEM,
+    'POWER_LEVEL':                 POWER_LEVEL,
+    'SPEED_LIMIT':                 SPEED_LIMIT,
+    // Bike info
+    'MOTOR_BATTERY_LEVEL':         MOTOR_BATTERY_LEVEL,
+    'MOTOR_BATTERY_STATE':         MOTOR_BATTERY_STATE,
+    'MODULE_BATTERY_LEVEL':        MODULE_BATTERY_LEVEL,
+    'MODULE_BATTERY_STATE':        MODULE_BATTERY_STATE,
+    'BIKE_FIRMWARE_VERSION':       BIKE_FIRMWARE_VERSION,
+    'BLE_CHIP_FIRMWARE_VERSION':   BLE_CHIP_FIRMWARE_VERSION,
+    'CONTROLLER_FIRMWARE_VERSION': CONTROLLER_FIRMWARE_VERSION,
+    'PCBA_HARDWARE_VERSION':       PCBA_HARDWARE_VERSION,
+    'FRAME_NUMBER':                FRAME_NUMBER,
+    // Bike state
+    'MODULE_MODE':                 MODULE_MODE,
+    'MODULE_STATE':                MODULE_STATE,
+    'ERRORS':                      ERRORS,
+    'WHEEL_SIZE':                  WHEEL_SIZE,
+    'CLOCK':                       CLOCK,
+    // Sound
+    'PLAY_SOUND':                  PLAY_SOUND,
+    'SOUND_VOLUME':                SOUND_VOLUME,
+    'BELL_SOUND':                  BELL_SOUND,
+    // Light
+    'LIGHT_MODE':                  LIGHT_MODE,
+    'SENSOR':                      SENSOR,
+}

@@ -67,6 +67,14 @@ class FakeBike {
     async playSound(id: number) {
         console.log('play sound:', id)
     }
+
+    async getLockState() {
+        return 3 // LockState.Unlocked
+    }
+
+    async unlockBike() {
+        console.log('unlockBike called')
+    }
 }
 
 const dummyBike: BikeCredentials = {

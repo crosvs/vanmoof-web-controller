@@ -128,7 +128,14 @@ export default function ConvertStep({ onDismiss, selectedFile, onConversionCompl
             return
         }
 
-        onConversionCompleted(fileWithHeader)
+        // Always pad to the full 400KB flash region with zeros.
+        // Without this, uploading a shorter sound over a longer one leaves stale PCM bytes in flash
+        // after the new sound ends, causing audible artifacts (the old audio bleeding through).
+        // Zero-padding overwrites the entire region so the bike reads only silence past the new sound.
+        const padded = new Uint8Array(400_000)
+        padded.set(fileWithHeader)
+
+        onConversionCompleted(padded)
 
         log("Done!")
         setConverting(false)
